@@ -27,6 +27,7 @@ std::vector<jdouble> kernel_values(jdouble s, jint r,jint y)
         jdouble v = kernel_value[i]/sum;
         kernel_value[i] = v;
     }
+
     return kernel_value;
 }
 
@@ -42,7 +43,7 @@ void kernel_compute(jint a0 , jint a1, jint a2, jint a3,jint h, jint r, jdouble 
     }
     //map of kernel values for second region
     for (i = a0; i < a1; i++) {
-        s = abs(sigmafar * (jdouble)(a1-i)/(a0-a1));
+        s = abs(sigmafar * (jdouble)(a1-i)/(a1-a0));
         k_value.push_back(kernel_values(s, r, i));
     }
     for(i=a1;i<a2;i++)
@@ -52,8 +53,11 @@ void kernel_compute(jint a0 , jint a1, jint a2, jint a3,jint h, jint r, jdouble 
     }
     //map of kernel values for fourth region
     for (i = a2; i < a3; i++) {
-        s = sigmanear * (jdouble)((i - a2) / (a3 - a2));
-        k_value.push_back(kernel_values(s, r, i));
+        s = (i-a2);
+        jint s1 = (a3-a2);
+        jdouble s2= (jdouble)(s/s1);
+        jdouble s3 = sigmanear * s2;
+        k_value.push_back(kernel_values(s3, r, i));
     }
     //map of kernel values for fifth region
     for(i=a3;i<h;i++)
@@ -76,18 +80,27 @@ std::vector<jdouble> intermediate_matrix(std::vector<jdouble> &i_matrix,std::vec
 
             // intermediate pixel computation
             for (j = 0; j < w; j++) {
-                value = 0.0;
+                value =0.0;
+
                 for (k = 0; k < (2 * r) + 1; k++) {
-                    pixelIndex = (i * w) + j -k;
+                    int ki = k-r;
+                    pixelIndex = (i * w) + j +ki;
                     if (pixelIndex >= 0 && pixelIndex < size) {
-                        value += (input[pixelIndex] * kernel[kernelIndex]);
+
+
+                        value += (input[pixelIndex] * kernel[k]);
 
                     }
                 }
+
+                if(value == 0.0){
+                    value = input[(i * w) + j];
+                }
+
                 i_matrix[(i * w) + j] = value;
             }
         }
-    }
+        }
 
 return i_matrix;
 }
@@ -108,18 +121,24 @@ std::vector<jdouble> output_matrix(std::vector<jdouble> &o_mat,std::vector<jdoub
                 jdouble value = 0.0;
                 for (jint k = 0; k < (2 * r) + 1; k++)
                 {
-                    kernelIndex = k;
-                    pixelIndex = (i - kernelIndex) * w+ j;
+                    kernelIndex = k-r;
+                    pixelIndex = (i + kernelIndex) * w+ j;
                     if (pixelIndex >= 0 && pixelIndex < i_mat.size())
                     {
-                            value += (kernel[kernelIndex] * i_mat[pixelIndex]);
+
+                            value += (kernel[k] * i_mat[pixelIndex]);
 
                     }
                 }
+                if(value == 0.0){
+                    value = i_mat[(i * w) + j];
+                }
                 o_mat[(i * w) + j] = value;
+
             }
         }
-    }
+        }
+
     return o_mat;
 }
 
@@ -134,9 +153,13 @@ std::vector<jdouble> Build_Blur(std::vector<jdouble> &channel_input, jint a0, ji
     kernel_compute(a0,a1,a2, a3,h,radius,(jdouble)sigma_near,(jdouble)sigma_far);
     int_matrix = intermediate_matrix(int_matrix,channel_input,a1,a2,w,h,radius);
     output = output_matrix(output,int_matrix,a1,a2,w,h,radius);
+    int_matrix.clear();
     channel_input.clear();
+    k_value.clear();
     return output;
 }
+
+
 
 extern "C"
 JNIEXPORT jint JNICALL
@@ -156,6 +179,7 @@ Java_edu_asu_ame_meteor_speedytiltshift2018_SpeedyTiltShift_tiltshiftcppnative(J
     jint size = width*height;
     jint a=0xff;
     int i;
+
     std::vector<jdouble> channelR;
     std::vector<jdouble> channelG;
     std::vector<jdouble> channelB;
@@ -169,6 +193,7 @@ Java_edu_asu_ame_meteor_speedytiltshift2018_SpeedyTiltShift_tiltshiftcppnative(J
         jint B = pixels[j] & 0xff;
         jint G = (pixels[j]>>8) & 0xff;
         jint R = (pixels[j]>>16)&0xff;
+
         channelR.push_back((jdouble)R);
         channelG.push_back((jdouble)G);
         channelB.push_back((jdouble)B);
@@ -179,15 +204,27 @@ Java_edu_asu_ame_meteor_speedytiltshift2018_SpeedyTiltShift_tiltshiftcppnative(J
     output_channelG = Build_Blur(channelG,a0,a1,a2,a3,width,height,sigma_far,sigma_near);
     output_channelB = Build_Blur(channelB,a0,a1,a2,a3,width,height,sigma_far,sigma_near);
 
+    jint black = ((255&0xff)<<16)|(255&0xff)<<8|(255&0xff)|0xff;
+
     //Build final Output
     for(i=0;i<size;i++) {
         jint aVal = (a & 0xff) << 24;
-        jint rVal = ((jint)output_channelR[i] & 0xff) << 16;
+
+        jdouble rr = output_channelR[i];
+
+
+        jint rVal = ((jint)rr & 0xff) << 16;
         jint gVal = ((jint)output_channelG[i] & 0xff) << 8;
         jint bVal = ((jint)output_channelB[i] & 0xff);
         jint val= aVal|rVal|gVal|bVal;
+        if(val == black || val == 0){
+            val = pixels[i];
+//            val = (jint)inputPixels_[i];
+        }
         outputPixels[i] = val ;
     }
+
+
 
 
     env->ReleaseIntArrayElements(inputPixels_, pixels, 0);
